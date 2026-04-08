@@ -3,100 +3,21 @@ name: Release to Docker Hub
 on:
   workflow_dispatch:
     inputs:
-      version_type:
-        description: '版本类型'
+      version:
+        description: '镜像版本号 (如: v1.0.0)'
         required: true
-        default: 'patch'
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/checkout@v4
 
-      - name: Get current version
-        id: get_version
-        run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          TAG_VERSION=${LATEST_TAG#v}
-
-          if [ -f VERSION ]; then
-            FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
-          else
-            FILE_VERSION="0.0.0"
-          fi
-
-          function version_gt() { test "$(printf '%s\n' "$@" | sort -V | head -n 1)" != "$1"; }
-
-          if version_gt "$FILE_VERSION" "$TAG_VERSION"; then
-            VERSION="$FILE_VERSION"
-          else
-            VERSION="$TAG_VERSION"
-          fi
-
-          echo "Current version: $VERSION"
-          echo "current_version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Calculate next version
-        id: next_version
-        env:
-          VERSION_TYPE: ${{ github.event.inputs.version_type }}
-        run: |
-          VERSION="${{ steps.get_version.outputs.current_version }}"
-          BASE_VERSION=$(echo "$VERSION" | sed 's/-.*$//')
-
-          IFS='.' read -r -a version_parts <<< "$BASE_VERSION"
-          MAJOR="${version_parts[0]:-0}"
-          MINOR="${version_parts[1]:-0}"
-          PATCH="${version_parts[2]:-0}"
-
-          case "$VERSION_TYPE" in
-            major)
-              NEW_VERSION="$((MAJOR + 1)).0.0"
-              ;;
-            minor)
-              NEW_VERSION="${MAJOR}.$((MINOR + 1)).0"
-              ;;
-            *)
-              NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-              ;;
-          esac
-
-          echo "New version: $NEW_VERSION"
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "new_tag=v$NEW_VERSION" >> $GITHUB_OUTPUT
-
-      - name: Update VERSION file
-        run: |
-          echo "${{ steps.next_version.outputs.new_version }}" > VERSION
-
-      - name: Commit VERSION and create tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add VERSION
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: bump version to ${{ steps.next_version.outputs.new_tag }} [skip ci]"
-          fi
-
-          NEW_TAG="${{ steps.next_version.outputs.new_tag }}"
-          git tag -a "$NEW_TAG" -m "Release $NEW_TAG"
-          git push origin HEAD:main "$NEW_TAG"
-
-      # Docker 构建并推送到 Docker Hub
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -117,13 +38,12 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/ds2api:${{ steps.next_version.outputs.new_tag }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/ds2api:${{ steps.next_version.outputs.new_version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/ds2api:${{ github.event.inputs.version }}
             ${{ secrets.DOCKERHUB_USERNAME }}/ds2api:latest
           labels: |
-            org.opencontainers.image.version=${{ steps.next_version.outputs.new_version }}
+            org.opencontainers.image.version=${{ github.event.inputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
           build-args: |
-            BUILD_VERSION=${{ steps.next_version.outputs.new_tag }}
+            BUILD_VERSION=${{ github.event.inputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
